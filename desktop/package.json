@@ -1,0 +1,8 @@
+{
+  "name": "padbench",
+  "productName": "PadBench",
+  "version": "1.0.0",
+  "description": "DualSense tester and refurbishment database",
+  "main": "main.js",
+  "license": "MIT"
+}

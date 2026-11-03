@@ -1,0 +1,13 @@
+services:
+  padbench:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    volumes:
+      - ./data:/data
+    # environment:
+    #   PADBENCH_TOKEN: change-me

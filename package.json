@@ -1,0 +1,12 @@
+{
+  "name": "padbench",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DualSense tester and refurbishment database",
+  "scripts": {
+    "server": "node server/server.js"
+  },
+  "engines": { "node": ">=22.13" },
+  "license": "MIT"
+}
