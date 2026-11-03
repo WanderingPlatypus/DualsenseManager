@@ -44,8 +44,31 @@ Restart=always
 WantedBy=multi-user.target
 UNIT
 
+# Daily update from GitHub when this was installed from a git clone (proxmox-create.sh does that).
+if [ -d "$SRC/.git" ]; then
+  cat > /etc/systemd/system/padbench-update.service <<UNIT
+[Unit]
+Description=Update PadBench from GitHub
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $SRC/server/update.sh
+UNIT
+  cat > /etc/systemd/system/padbench-update.timer <<UNIT
+[Unit]
+Description=Daily PadBench update
+[Timer]
+OnCalendar=*-*-* 04:30
+RandomizedDelaySec=30m
+Persistent=true
+[Install]
+WantedBy=timers.target
+UNIT
+fi
+
 systemctl daemon-reload
-systemctl enable --now padbench
+systemctl enable padbench
+systemctl restart padbench
+[ -d "$SRC/.git" ] && systemctl enable --now padbench-update.timer
 sleep 1
 IP=$(hostname -I | awk '{print $1}')
 echo

@@ -1,7 +1,8 @@
 import { DualSense, HID_FILTERS, colorFromSerial, FINETUNE_LABELS } from './ds5.js';
 import { GamepadSource, findDualSenseGamepads } from './gamepad.js';
-import { padSvg } from './padsvg.js';
-import { COMPONENT_GROUPS, STATUS, GRADES, SALE_STATUS, emptyRecord, uid } from './schema.js';
+import { loadPad } from './padsvg.js';
+import { gradePicker } from './grade.js';
+import { COMPONENT_GROUPS, STATUS, SALE_STATUS, emptyRecord, uid, suggestGrade } from './schema.js';
 import { getRecord, saveRecord, findByMac, allRecords } from './store.js';
 import { h, $, $$, toast, confirmBox, swatch, debounce, fill } from './ui.js';
 
@@ -15,7 +16,9 @@ let record = null;
 let session = null;
 let root = null;
 let frame = 0;
-let lightTimer = 0;
+let padView = null;
+let gradeRefresh = null;
+const desktop = !!window.padbench?.desktop;
 
 function newSession() {
   return {
@@ -53,8 +56,10 @@ const isDs = (d) => HID_FILTERS.some((f) => f.vendorId === d.vendorId && f.produ
 
 async function requestHid() {
   try {
-    const devs = await navigator.hid.requestDevice({ filters: HID_FILTERS });
+    const known = (await navigator.hid.getDevices()).filter(isDs);
+    const devs = known.length ? known : await navigator.hid.requestDevice({ filters: HID_FILTERS });
     if (devs[0]) await attachHid(devs[0]);
+    else toast('No DualSense found. Plug it in by USB, or turn on a paired controller with the PS button.', true, 6000);
   } catch (e) { toast('Could not open the controller: ' + e.message, true); }
 }
 
@@ -67,7 +72,11 @@ async function attachHid(device) {
     ds.onState = onState;
     info = { ...(await ds.getInfo()), loading: false };
     if (!info.clone) {
-      try { await ds.initOutput(); await ds.setLightbar(63, 111, 232); setLightbarUi(63, 111, 232); } catch { /* BT output may fail on some stacks */ }
+      try { await ds.initOutput(); await ds.setLightbar(63, 111, 232); setLightbarUi(63, 111, 232); } catch (e) { console.warn('output init', e); }
+    }
+    if (ds.bt) {
+      // Over Bluetooth the controller starts in a basic mode without touchpad, motion or battery data.
+      for (let i = 0; i < 3 && !ds.state.full; i++) { await sleep(800); await ds.enableFullReports(); }
     }
     if (ds.connection === 'usb' ) autoResult('usb', 'ok');
     if (ds.connection === 'bluetooth') autoResult('bluetooth', 'ok');
@@ -173,21 +182,9 @@ function draw() {
   frame = 0;
   if (!root || !latest || !src) return;
   const s = latest;
-  const svg = $('svg.pad', root);
-  if (svg) {
-    for (const el of $$('[data-b]', svg)) {
-      const k = el.dataset.b;
-      el.classList.toggle('on', !!s.buttons[k]);
-      el.classList.toggle('seen', !!session.seen[k]);
-    }
-    const n = (v) => (v - 127.5) / 127.5;
-    $('#ldot', svg).setAttribute('cx', 215 + n(s.lx) * 20); $('#ldot', svg).setAttribute('cy', 222 + n(s.ly) * 20);
-    $('#rdot', svg).setAttribute('cx', 385 + n(s.rx) * 20); $('#rdot', svg).setAttribute('cy', 222 + n(s.ry) * 20);
-    $('#l2fill', svg).setAttribute('width', (s.l2 / 255) * 100);
-    $('#r2fill', svg).setAttribute('width', (s.r2 / 255) * 100);
-    $('#touchdots', svg).innerHTML = (s.touch || []).filter((t) => t.active)
-      .map((t) => `<circle class="touch" cx="${212 + (t.x / 1919) * 176}" cy="${66 + (t.y / 1079) * 100}" r="7"/>`).join('');
-  }
+  if (padView?.svg.isConnected) padView.update(s, session.seen);
+  const mode = $('#btmode', root);
+  if (mode) mode.classList.toggle('hidden', !!s.full || src.connection !== 'bluetooth');
   drawStick('l', s.lx, s.ly);
   drawStick('r', s.rx, s.ry);
   for (const t of ['l2', 'r2']) {
@@ -302,15 +299,27 @@ async function micTest() {
     ctx.createMediaStreamSource(stream).connect(an);
     const buf = new Uint8Array(an.fftSize);
     const meter = h('div', { class: 'meter' }, h('i'));
-    const note = /dualsense|wireless controller/i.test(label) ? '' : ' — this is not the controller mic. Pick the DualSense as input in Windows sound settings.';
+    const isPadMic = /dualsense|wireless controller/i.test(label);
+    const note = isPadMic ? '' : ' — this is not the controller mic, so the test won’t pass by itself. Pick the DualSense as input in Windows sound settings.';
+    const status = h('p', { class: 'small muted' }, 'Waiting for sound…');
     const stop = confirmBox('Microphone test', h('div', { class: 'stack' },
-      h('p', {}, `Listening on: ${label}${note}`), h('p', {}, 'Blow or speak into the controller. The bar should move.'), meter), 'Done');
-    let peak = 0, raf;
+      h('p', {}, `Listening on: ${label}${note}`), h('p', {}, 'Blow or speak into the controller. The bar should move.'), meter, status), 'Done');
+    let peak = 0, raf, loudFrames = 0, passed = false;
     const loop = () => {
       an.getByteTimeDomainData(buf);
       let m = 0; for (const v of buf) m = Math.max(m, Math.abs(v - 128));
       peak = Math.max(peak * 0.92, m / 128);
-      meter.firstChild.style.width = Math.min(100, peak * 140) + '%';
+      const level = Math.min(100, peak * 140);
+      meter.firstChild.style.width = level + '%';
+      // About a fifth of the bar for a quarter of a second counts as a working mic.
+      if (level > 20) loudFrames++;
+      if (!passed && isPadMic && loudFrames > 15) {
+        passed = true;
+        session.manual.delete('microphone');
+        autoResult('microphone', 'ok');
+        status.textContent = 'Microphone works — marked OK. You can close this.';
+        status.style.color = 'var(--triangle)';
+      }
       raf = requestAnimationFrame(loop);
     };
     loop();
@@ -373,7 +382,7 @@ async function saveSession() {
     actions: session.actions.map((a) => a.label).filter((v, i, a) => a.indexOf(v) === i && /calibrat|fine-tun/i.test(v)),
   }]);
   record = await saveRecord(rec);
-  toast(`Saved ${Object.keys(results).length} results to ${rec.serial}`);
+  toast(`Saved ${Object.keys(results).length} results to ${rec.serial}${rec.gradeManual ? '' : rec.grade ? ', grade ' + rec.grade + ' suggested' : ''}`);
   render();
 }
 const round1 = (v) => (v === null || v === undefined ? null : Math.round(v * 10) / 10);
@@ -398,17 +407,30 @@ function connectScreen() {
   const isFirefox = !hasHID;
   const gps = isFirefox ? findDualSenseGamepads() : [];
   if (isFirefox && gps[0] && !src) setTimeout(() => attachGamepad(gps[0]));
+  const art = h('div');
+  loadPad(art).catch(() => {});
+  const steps = h('ol', { class: 'steps' },
+    h('li', {}, h('b', {}, 'USB: '), 'plug the controller into this PC. Every test, the serial number and calibration work over USB.'),
+    h('li', {}, h('b', {}, 'Bluetooth, first time: '), 'hold Create and PS together until the light bar flashes, then add it in Windows Bluetooth settings as "Wireless Controller".'),
+    h('li', {}, h('b', {}, 'Bluetooth, already paired: '), 'press PS on the controller.'));
+  let actions;
+  if (isFirefox) {
+    actions = h('div', { class: 'notice' }, 'Firefox can only read buttons, sticks and triggers. Serial number, lights, rumble, speaker, motion and calibration need the Windows app, or Chrome or Edge opened on your server’s https address.');
+  } else if (desktop) {
+    actions = h('div', { class: 'row' },
+      h('button', { class: 'btn primary', onclick: requestHid }, 'Find controller'),
+      h('button', { class: 'btn', onclick: () => window.padbench.openBluetoothSettings() }, 'Open Bluetooth settings'));
+  } else {
+    actions = h('div', { class: 'stack' },
+      h('p', {}, 'The browser asks once which controller this page may use. After that it connects by itself.'),
+      h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: requestHid }, 'Choose controller')));
+  }
   return h('section', { class: 'connect-hero' },
-    h('div', {},
-      h('h1', {}, 'Plug in a controller'),
-      isFirefox
-        ? h('div', { class: 'stack' },
-          h('p', {}, 'Connect a DualSense by USB or Bluetooth, then press any button on it.'),
-          h('div', { class: 'notice' }, 'Firefox can only read buttons, sticks and triggers. Serial number, lights, rumble, speaker, motion and calibration need the Windows app, or Chrome or Edge opened on your server’s https address.'))
-        : h('div', { class: 'stack' },
-          h('p', {}, 'Use a USB cable for everything: serial number, info, calibration and every test. Bluetooth works for inputs, lights and rumble; the serial is matched by the controller’s Bluetooth address once it has been seen over USB.'),
-          h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: requestHid }, 'Connect controller')))),
-    h('div', { html: padSvg() }));
+    h('div', { class: 'stack' },
+      h('h1', {}, isFirefox ? 'Connect a controller' : 'Waiting for a controller'),
+      h('p', {}, isFirefox ? 'Connect a DualSense by USB or Bluetooth, then press any button on it.' : 'It connects by itself as soon as Windows sees it.'),
+      steps, actions),
+    art);
 }
 
 function identity() {
@@ -453,8 +475,14 @@ function linkBox() {
 
 function bench() {
   const limited = info.limited;
+  const padWrap = h('div', { class: 'pad-wrap' });
+  padView = null;
+  loadPad(padWrap, { edge: src.isEdge }).then((v) => { padView = v; if (latest) draw(); }).catch((e) => console.error(e));
   const live = h('section', { class: 'core' },
-    h('div', { class: 'pad-wrap', html: padSvg({ edge: src.isEdge }) }),
+    padWrap,
+    src.connection === 'bluetooth' ? h('div', { class: 'notice hidden', id: 'btmode', style: { marginTop: '12px' } },
+      'Bluetooth basic mode: touchpad, motion and battery are not reported yet. ',
+      h('button', { class: 'btn sm', onclick: () => src.enableFullReports() }, 'Retry')) : null,
     h('div', { class: 'gauges' },
       gauge('l', 'Left stick'), gauge('r', 'Right stick'),
       h('div', { class: 'gauge wide' },
@@ -577,6 +605,7 @@ function checklistPanel() {
 }
 
 function renderChecklist() {
+  gradeRefresh?.();
   const panel = root && $('#checklist', root);
   if (!panel || !src) return;
   const groups = COMPONENT_GROUPS.filter((g) => !g.edge || src.isEdge);
@@ -627,16 +656,20 @@ function quickRecord() {
   const upd = async (patch) => { const cur = await getRecord(rec.serial) || rec; Object.assign(cur, patch); record = await saveRecord(cur, { quiet: true }); };
   const notes = h('textarea', { placeholder: 'Anything worth remembering about this one', oninput: debounce((e) => upd({ notes: e.target.value }), 500) });
   notes.value = rec.notes || '';
-  const gradeBtns = h('div', { class: 'grades' }, GRADES.map(([g, label]) => h('button', { title: label, 'aria-pressed': String(rec.grade === g), onclick: async (e) => {
-    await upd({ grade: rec.grade === g ? '' : g });
-    $$('button', e.currentTarget.parentNode).forEach((b) => b.setAttribute('aria-pressed', String(b.textContent === record.grade)));
-  } }, g)));
+  // Preview the grade live from this session's results; it is stored when the session is saved.
+  const preview = () => {
+    const merged = { ...record, components: { ...(record.components || {}), ...session.results } };
+    if (!merged.gradeManual) merged.grade = suggestGrade(merged);
+    return merged;
+  };
+  const gradeBox = gradePicker(preview, upd);
+  gradeRefresh = gradeBox.refresh;
   const status = h('select', { onchange: (e) => upd({ sale: { ...(record.sale || {}), status: e.target.value } }) },
     SALE_STATUS.map(([v, l]) => h('option', { value: v, selected: rec.sale?.status === v }, l)));
   return h('div', { class: 'panel' },
     h('div', { class: 'panel-head' }, h('h2', {}, 'Record'), h('span', { class: 'muted small' }, `${(rec.tests || []).length} saved test sessions`)),
     h('div', { class: 'stack' },
-      h('div', { class: 'field' }, h('span', {}, 'Grade'), gradeBtns),
+      h('div', { class: 'field' }, h('span', {}, 'Grade'), gradeBox),
       h('label', { class: 'field' }, h('span', {}, 'Status'), status),
       h('label', { class: 'field' }, h('span', {}, 'Notes'), notes),
       h('a', { href: '#/c/' + encodeURIComponent(rec.serial) }, 'Cosmetic defects, dirt, faults, photos and sale details are in the full record')));

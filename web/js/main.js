@@ -3,6 +3,7 @@ import { renderList, renderRecord } from './records.js';
 import { renderSettings } from './settings.js';
 import { onSync, onChange, syncNow } from './store.js';
 import { $, $$ } from './ui.js';
+import { scheduleUpdateChecks } from './update.js';
 
 const view = $('#view');
 
@@ -35,3 +36,4 @@ dot.addEventListener('click', () => { location.hash = '#/settings'; });
 route();
 initConnections();
 syncNow();
+scheduleUpdateChecks();

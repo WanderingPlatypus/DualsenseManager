@@ -5,6 +5,7 @@ import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { mergeRecords, sameRecord } from '../web/js/merge.js';
 
@@ -64,8 +65,24 @@ function backup() {
 setTimeout(backup, 60_000);
 setInterval(backup, 24 * 3600_000);
 
+// List of web app files with checksums, so the Windows app can update itself from this server.
+function appManifest() {
+  const files = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else files.push({ path: path.relative(WEB_DIR, full).split(path.sep).join('/'), sha256: crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex') });
+    }
+  };
+  walk(WEB_DIR);
+  let version = '0';
+  try { version = JSON.parse(fs.readFileSync(path.join(WEB_DIR, 'version.json'), 'utf8')).version; } catch { /* none */ }
+  return { version, files };
+}
+
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.ttf': 'font/ttf', '.txt': 'text/plain; charset=utf-8' };
 
 function send(res, status, body, type = 'application/json') {
   res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
@@ -91,13 +108,14 @@ async function handle(req, res) {
   if (url.pathname.startsWith('/api/')) {
     if (TOKEN && req.headers['x-padbench-token'] !== TOKEN && url.searchParams.get('token') !== TOKEN) return send(res, 401, { error: 'unauthorized' });
     try {
-      if (url.pathname === '/api/health') return send(res, 200, { ok: true, app: 'padbench', controllers: qCount.get().n, seq: qMaxSeq.get().s, time: Date.now() });
+      if (url.pathname === '/api/health') return send(res, 200, { ok: true, app: 'padbench', version: appManifest().version, controllers: qCount.get().n, seq: qMaxSeq.get().s, time: Date.now() });
       if (url.pathname === '/api/sync' && req.method === 'POST') {
         const { since = 0, changes = [] } = JSON.parse(await readBody(req) || '{}');
         if (Array.isArray(changes) && changes.length) applyChanges(changes);
         const out = qSince.all(+since || 0).map((r) => JSON.parse(r.data));
         return send(res, 200, { seq: qMaxSeq.get().s, changes: out });
       }
+      if (url.pathname === '/api/app-manifest') return send(res, 200, appManifest());
       if (url.pathname === '/api/export.json') {
         res.setHeader('content-disposition', 'attachment; filename="padbench-export.json"');
         return send(res, 200, qAll.all().map((r) => JSON.parse(r.data)));

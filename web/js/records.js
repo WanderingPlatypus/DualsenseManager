@@ -1,6 +1,7 @@
 import { COMPONENT_GROUPS, STATUS, GRADES, SALE_STATUS, COSMETIC_TAGS, DIRT_TAGS, FAULT_TAGS, emptyRecord, uid } from './schema.js';
 import { COLOR_CODES } from './ds5.js';
 import { allRecords, getRecord, saveRecord, deleteRecord } from './store.js';
+import { gradePicker } from './grade.js';
 import { h, $, $$, toast, confirmBox, dialog, fmtDate, money, debounce, swatch, fill } from './ui.js';
 
 const saleLabel = Object.fromEntries(SALE_STATUS);
@@ -116,7 +117,9 @@ export async function renderRecord(root, serial) {
     fill(root, h('div', { class: 'empty' }, h('h2', {}, `No controller with serial ${serial}`), h('p', {}, h('a', { href: '#/db' }, 'Back to the list'))));
     return;
   }
-  const persist = debounce(async () => { rec = await saveRecord(rec, { quiet: true }); }, 400);
+  let gradeBox = null;
+  const saveNow = async () => { rec = await saveRecord(rec, { quiet: true }); gradeBox?.refresh(); };
+  const persist = debounce(saveNow, 400);
   const set = (path, v) => {
     const parts = path.split('.');
     let o = rec;
@@ -140,10 +143,12 @@ export async function renderRecord(root, serial) {
       e.currentTarget.setAttribute('aria-pressed', String(sel.has(t)));
       rec[key] = [...sel]; persist();
     } }, t)), h('button', { class: 'tag', onclick: async (e) => {
+      const group = e.currentTarget.parentNode; // read before the await: currentTarget is cleared afterwards
       const inp = h('input', { type: 'text', placeholder: 'Describe it' });
+      inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') inp.closest('dialog')?.querySelector('.btn.primary')?.click(); });
       if (await dialog({ title: 'Add your own', body: inp, actions: [{ label: 'Cancel', value: false }, { label: 'Add', value: true, kind: 'primary' }] }) && inp.value.trim()) {
         sel.add(inp.value.trim()); rec[key] = [...sel]; persist();
-        e.currentTarget.parentNode.replaceWith(tagGroup(key, tags, cls));
+        group.replaceWith(tagGroup(key, tags, cls));
       }
     } }, '+ Other'));
   };
@@ -192,10 +197,7 @@ export async function renderRecord(root, serial) {
       text('location', 'Where it is', { placeholder: 'Shelf, box, drawer…', full: true })));
 
   // ---- condition ----
-  const gradeBtns = h('div', { class: 'grades' }, GRADES.map(([g, label]) => h('button', { title: label, 'aria-pressed': String(rec.grade === g), onclick: (e) => {
-    rec.grade = rec.grade === g ? '' : g; persist();
-    $$('button', e.currentTarget.parentNode).forEach((b) => b.setAttribute('aria-pressed', String(b.textContent === rec.grade)));
-  } }, g)));
+  gradeBox = gradePicker(() => rec, async (patch) => { Object.assign(rec, patch); await saveNow(); });
   const groups = COMPONENT_GROUPS.filter((g) => !g.edge || /edge/i.test(rec.model));
   const compGrid = h('div', {}, groups.map((g) => h('div', { class: 'group' },
     h('div', { class: 'group-head' }, h('h3', {}, g.name)),
@@ -211,7 +213,7 @@ export async function renderRecord(root, serial) {
     }))));
   const condition = h('div', { class: 'panel' },
     h('div', { class: 'panel-head' }, h('h2', {}, 'What works'), h('span', { class: 'muted small' }, 'Filled in by saved test sessions; change anything by hand')),
-    h('div', { class: 'field', style: { marginBottom: '12px' } }, h('span', {}, 'Overall grade'), gradeBtns),
+    h('div', { class: 'field', style: { marginBottom: '12px' } }, h('span', {}, 'Overall grade'), gradeBox),
     compGrid);
 
   const cosmetic = h('div', { class: 'panel' }, h('div', { class: 'panel-head' }, h('h2', {}, 'Cosmetic defects')),

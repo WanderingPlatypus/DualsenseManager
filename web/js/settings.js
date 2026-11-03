@@ -1,6 +1,7 @@
 import { getMeta, setMeta, syncNow, onSync, testServer, serverUrl, allRecords, importRecords, resetSyncCursor } from './store.js';
 import { h, toast, confirmBox, fill } from './ui.js';
 import { download, exportCsv } from './records.js';
+import { checkForUpdates, appVersion } from './update.js';
 
 export async function renderSettings(root) {
   const url = h('input', { type: 'url', placeholder: 'http://192.168.1.50:8080', value: await getMeta('serverUrl', '') });
@@ -80,7 +81,9 @@ export async function renderSettings(root) {
             h('dt', {}, 'Firefox'), h('dd', {}, 'Database, plus buttons, sticks and triggers through the Gamepad API. Type the serial by hand.'))),
         h('div', { class: 'panel' },
           h('div', { class: 'panel-head' }, h('h2', {}, 'About')),
-          h('p', { class: 'muted small', style: { margin: 0 } }, 'PadBench 1.0. Controller protocol based on dualshock-tools (MIT, © the_al) and the Linux hid-playstation driver. Saira and Atkinson Hyperlegible fonts under the SIL Open Font License.'),
+          h('div', { class: 'row', style: { marginBottom: '10px' } }, h('span', {}, `Version ${await appVersion()}`),
+            window.padbench?.checkUpdate ? h('button', { class: 'btn sm', onclick: () => checkForUpdates({ quiet: false }) }, 'Check for updates') : null),
+          h('p', { class: 'muted small', style: { margin: 0 } }, 'The Windows app checks your server for a newer version every few hours. The server picks up new versions from GitHub every night. Controller protocol and controller drawing from dualshock-tools (MIT, © the_al) and the Linux hid-playstation driver. Saira and Atkinson Hyperlegible fonts under the SIL Open Font License.'),
           h('p', { class: 'muted small' }, `This device: ${(await allRecords()).length} controllers. Theme follows your system.`)))));
 }
 

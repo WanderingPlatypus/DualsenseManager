@@ -66,6 +66,14 @@ Over Bluetooth the controller is matched by its Bluetooth address, which the app
 
 Under **Calibration** (USB only): stick centers, stick range, fine-tune of the raw values, then **Save permanently**. Changes are temporary until saved; rebooting the controller discards them. Controllers that don't answer like a genuine DualSense have calibration disabled. On the DualSense Edge the permanent save needs the stick modules flashed, so finish that step in dualshock-tools.
 
+## Updates
+
+New versions go to GitHub. If the server was installed with `proxmox-create.sh`, it pulls them every night at about 04:30. To update it right away, run this in the Proxmox shell, using the container number the setup printed:
+```bash
+pct exec <container-id> -- bash /opt/padbench-src/server/update.sh
+```
+The Windows app checks the server every few hours and offers to restart when a new version has been downloaded. You can also check by hand under Sync → About → **Check for updates**. Browsers opened on the server always get the latest version.
+
 ## Running from source
 
 ```bash
@@ -75,4 +83,4 @@ For the desktop shell: copy `desktop/main.js`, `desktop/preload.js`, `desktop/pa
 
 ## Credits
 
-Controller protocol details come from [dualshock-tools](https://github.com/dualshock-tools/dualshock-tools.github.io) (MIT, © the_al) and the Linux `hid-playstation` driver. Fonts: Saira and Atkinson Hyperlegible (SIL Open Font License).
+Controller protocol details and the controller drawing come from [dualshock-tools](https://github.com/dualshock-tools/dualshock-tools.github.io) (MIT, © the_al) and the Linux `hid-playstation` driver. Fonts: Saira and Atkinson Hyperlegible (SIL Open Font License).

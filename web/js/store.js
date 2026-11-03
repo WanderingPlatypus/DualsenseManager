@@ -1,5 +1,6 @@
 // Local-first store (IndexedDB) with background sync to the home server.
 import { mergeRecords } from './merge.js';
+import { applyAutoGrade } from './schema.js';
 
 const DB_NAME = 'padbench';
 let dbp;
@@ -57,6 +58,7 @@ export const onChange = (fn) => { listeners.add(fn); return () => listeners.dele
 const emit = (what) => listeners.forEach((fn) => fn(what));
 
 export async function saveRecord(rec, { quiet = false } = {}) {
+  applyAutoGrade(rec);
   rec.updatedAt = Math.max(Date.now(), (rec.updatedAt || 0) + 1);
   rec._dirty = 1;
   await tx('controllers', 'readwrite', (s) => req(s.put(rec)));

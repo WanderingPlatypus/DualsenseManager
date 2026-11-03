@@ -272,9 +272,19 @@ export class DualSense {
   }
 
   async initOutput() {
-    this.out.lightSetup = 0x02; // release the firmware's default lightbar animation
-    await this._send({ f1: 0x04 | 0x10 | 0x01, f2: 0x02 });
+    // Same order as the Linux driver: first release the firmware's own lightbar (it runs a
+    // pairing animation over Bluetooth and ignores colour changes until released), then set LEDs.
+    this.out.lightSetup = 0x02;
+    await this._send({ f2: 0x02 });
     this.out.lightSetup = 0;
+    await sleep(this.bt ? 150 : 20);
+    await this._send({ f1: 0x04 | 0x10 | 0x01 });
+  }
+
+  async enableFullReports() {
+    if (this.state.full) return;
+    try { await withTimeout(this.device.receiveFeatureReport(0x05), 1500, 'calibration'); } catch { /* ignore */ }
+    try { await this._send({}); } catch { /* ignore */ }
   }
 
   setLightbar(r, g, b) { Object.assign(this.out, { r: clamp(r, 0, 255), g: clamp(g, 0, 255), b: clamp(b, 0, 255) }); return this._send({ f1: 0x04 }); }

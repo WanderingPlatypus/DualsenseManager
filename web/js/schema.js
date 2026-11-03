@@ -60,3 +60,28 @@ export function emptyRecord(serial) {
 }
 
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+// Grade suggested from what is recorded: cosmetic wear sets the base, faults pull it down.
+export function suggestGrade(rec) {
+  const comps = Object.values(rec.components || {});
+  const faulty = Math.max(comps.filter((v) => v === 'faulty').length, (rec.faults || []).filter((f) => !/clone/i.test(f)).length);
+  const minor = comps.filter((v) => v === 'minor').length;
+  const cos = rec.cosmetic || [];
+  const tested = comps.some((v) => v && v !== 'untested');
+  if (!tested && !cos.length && !faulty) return '';
+  if (rec.clone || faulty >= 4) return 'P';
+  let g = cos.length === 0 ? 0 : cos.length <= 2 ? 1 : cos.length <= 4 ? 2 : 3;
+  if (cos.some((t) => /crack|missing|chewed|dent/i.test(t))) g = Math.max(g, 3);
+  if (minor >= 1) g = Math.max(g, 1);
+  if (minor >= 3) g = Math.max(g, 2);
+  if (faulty >= 1) g = Math.max(g, 2);
+  if (faulty >= 2) g = Math.max(g, 3);
+  return 'ABCD'[g];
+}
+
+// Keeps the grade in step with the suggestion until the user picks one by hand.
+export function applyAutoGrade(rec) {
+  if (rec.gradeManual === undefined) rec.gradeManual = !!rec.grade;
+  if (!rec.gradeManual) rec.grade = suggestGrade(rec);
+  return rec;
+}

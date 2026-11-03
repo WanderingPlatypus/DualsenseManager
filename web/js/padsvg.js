@@ -1,46 +1,108 @@
-// Schematic top view of a DualSense. Every pressable part carries data-b="<button>".
-export function padSvg({ edge = false } = {}) {
-  const face = (cx, cy, name, sym) => `<g><circle class="b" data-b="${name}" cx="${cx}" cy="${cy}" r="15"/>${sym}</g>`;
-  const tri = 'M470 126 l8 13 h-16 z';
-  const cir = '<circle class="sym" cx="503" cy="165" r="6.5"/>';
-  const crs = '<path class="sym" d="M464 189 l12 12 M476 189 l-12 12"/>';
-  const sqr = '<rect class="sym" x="431" y="159" width="12" height="12"/>';
-  const edgeParts = edge ? `
-    <rect class="b" data-b="fn_left" x="232" y="262" width="26" height="9" rx="4.5"/>
-    <rect class="b" data-b="fn_right" x="342" y="262" width="26" height="9" rx="4.5"/>
-    <rect class="b" data-b="paddle_left" x="62" y="300" width="44" height="12" rx="6" stroke-dasharray="4 3"/>
-    <rect class="b" data-b="paddle_right" x="494" y="300" width="44" height="12" rx="6" stroke-dasharray="4 3"/>
-    <text class="lbl" x="84" y="330">paddle</text><text class="lbl" x="516" y="330">paddle</text>` : '';
-  return `
-<svg class="pad" viewBox="0 0 600 390" role="img" aria-label="Controller input map">
-  <defs><clipPath id="clipL2"><rect x="95" y="16" width="100" height="22" rx="9"/></clipPath>
-  <clipPath id="clipR2"><rect x="405" y="16" width="100" height="22" rx="9"/></clipPath></defs>
-  <rect class="b" data-b="l2" x="95" y="16" width="100" height="22" rx="9"/>
-  <rect class="tfill" id="l2fill" x="95" y="16" width="0" height="22" clip-path="url(#clipL2)"/>
-  <rect class="b" data-b="r2" x="405" y="16" width="100" height="22" rx="9"/>
-  <rect class="tfill" id="r2fill" x="405" y="16" width="0" height="22" clip-path="url(#clipR2)"/>
-  <text class="lbl" x="145" y="31">L2</text><text class="lbl" x="455" y="31">R2</text>
-  <rect class="b" data-b="l1" x="98" y="42" width="96" height="14" rx="6"/>
-  <rect class="b" data-b="r1" x="406" y="42" width="96" height="14" rx="6"/>
-  <path class="body" d="M150 60 C210 46 390 46 450 60 C520 70 560 110 575 170 C595 250 600 320 560 350 C530 372 490 362 470 330 C445 290 420 272 380 272 L220 272 C180 272 155 290 130 330 C110 362 70 372 40 350 C0 320 5 250 25 170 C40 110 80 70 150 60 Z"/>
-  <rect class="b" data-b="touchpad" x="212" y="66" width="176" height="100" rx="16"/>
-  <g id="touchdots"></g>
-  <rect class="b" data-b="create" x="186" y="78" width="9" height="22" rx="4.5"/>
-  <rect class="b" data-b="options" x="405" y="78" width="9" height="22" rx="4.5"/>
-  <rect class="b" data-b="up" x="119" y="124" width="22" height="26" rx="5"/>
-  <rect class="b" data-b="down" x="119" y="180" width="22" height="26" rx="5"/>
-  <rect class="b" data-b="left" x="89" y="154" width="26" height="22" rx="5"/>
-  <rect class="b" data-b="right" x="145" y="154" width="26" height="22" rx="5"/>
-  ${face(470, 135, 'triangle', `<path class="sym" d="${tri}"/>`)}
-  ${face(503, 165, 'circle', cir)}
-  ${face(470, 195, 'cross', crs)}
-  ${face(437, 165, 'square', sqr)}
-  <circle class="b" data-b="l3" cx="215" cy="222" r="30"/>
-  <circle class="b" data-b="r3" cx="385" cy="222" r="30"/>
-  <circle class="stickdot" id="ldot" cx="215" cy="222" r="9"/>
-  <circle class="stickdot" id="rdot" cx="385" cy="222" r="9"/>
-  <circle class="b" data-b="ps" cx="300" cy="212" r="11"/>
-  <rect class="b" data-b="mute" x="289" y="236" width="22" height="8" rx="4"/>
-  ${edgeParts}
-</svg>`;
+// Live controller drawing. The artwork is dualshock-tools' DualSense / Edge SVG
+// (MIT, (c) 2024 the_al — see assets/LICENSE-dualshock-tools.txt); the update logic mirrors theirs.
+const cache = {};
+const C = { outline: '#6f7789', buttonLine: '#8d96a8', infill: '#262932', pressed: '#3f6fe8', seen: '#1d4a45' };
+
+const SVG_NAME = {
+  cross: 'Cross', circle: 'Circle', square: 'Square', triangle: 'Triangle', l1: 'L1', r1: 'R1',
+  create: 'Create', options: 'Options', ps: 'PS', mute: 'Mute', touchpad: 'Trackpad',
+  up: 'Up', down: 'Down', left: 'Left', right: 'Right', l3: 'L3', r3: 'R3',
+  fn_left: 'Fn_left', fn_right: 'Fn_right', paddle_left: 'Paddle_left', paddle_right: 'Paddle_right',
+};
+const STICKS = {
+  ds5: { max: 25, scale: ' scale(0.70)', base: 'translate(0,0.65)' },
+  edge: { max: 25, scale: '', base: '' },
+};
+
+function paint(group, color) {
+  if (!group) return;
+  for (const el of group.querySelectorAll('path,rect,circle,ellipse,line,polyline,polygon')) {
+    if (el.classList.contains('ds-touch')) continue;
+    el.setAttribute('fill', color);
+    el.setAttribute('stroke', color);
+  }
+}
+
+function mix(a, b, t) {
+  const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const [x, y] = [p(a), p(b)];
+  return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('');
+}
+
+export async function loadPad(container, { edge = false } = {}) {
+  const file = edge ? 'ds-edge-controller.svg' : 'dualsense-controller.svg';
+  cache[file] ??= fetch('assets/' + file).then((r) => r.text());
+  container.innerHTML = await cache[file];
+  const svg = container.querySelector('svg');
+  svg.removeAttribute('style');
+  svg.removeAttribute('id');
+  svg.classList.add('pad');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Live controller input');
+  const q = (id) => svg.querySelector(`[id="${id}"]`);
+  paint(q('Controller'), C.outline);
+  for (const id of ['Button_outlines', 'Button_outlines_behind', 'L3_outline', 'R3_outline', 'Trackpad_outline', 'Speaker_grill']) paint(q(id), C.buttonLine);
+  for (const id of ['Controller_infills', 'Button_infills', 'Button_infills_behind', 'L3_infill', 'R3_infill', 'Trackpad_infill']) paint(q(id), C.infill);
+  for (const id of ['L2_percentage', 'R2_percentage']) q(id)?.setAttribute('opacity', '0');
+  return new PadView(svg, edge, q);
+}
+
+class PadView {
+  constructor(svg, edge, q) {
+    this.svg = svg; this.q = q; this.cfg = edge ? STICKS.edge : STICKS.ds5;
+    this.last = {};
+    this.trackpad = q('Trackpad_infill');
+    this.tpBox = null;
+  }
+
+  update(s, seen = {}) {
+    for (const [name, id] of Object.entries(SVG_NAME)) {
+      const color = s.buttons[name] ? C.pressed : seen[name] ? C.seen : C.infill;
+      if (this.last[name] !== color) { paint(this.q(id + '_infill'), color); this.last[name] = color; }
+    }
+    for (const t of ['l2', 'r2']) {
+      const v = s[t] | 0;
+      const key = t + v + (seen[t] ? 's' : '');
+      if (this.last[t] !== key) {
+        this.last[t] = key;
+        paint(this.q(t.toUpperCase() + '_infill'), mix(seen[t] ? C.seen : C.infill, C.pressed, v / 255));
+        const pct = this.q(t.toUpperCase() + '_percentage');
+        if (pct) {
+          const p = Math.round((v / 255) * 100);
+          pct.textContent = p + ' %';
+          pct.setAttribute('opacity', p > 0 ? '1' : '0');
+          pct.setAttribute('fill', '#ffffff');
+        }
+      }
+    }
+    const n = (v) => (v - 127.5) / 127.5;
+    const { max, scale, base } = this.cfg;
+    this.q('L3')?.setAttribute('transform', `${base} translate(${n(s.lx) * max},${n(s.ly) * max})${scale}`);
+    this.q('R3')?.setAttribute('transform', `${base} translate(${n(s.rx) * max},${n(s.ry) * max})${scale}`);
+    this._touch(s.touch || []);
+  }
+
+  _touch(points) {
+    const tp = this.trackpad;
+    if (!tp) return;
+    tp.querySelectorAll('circle.ds-touch').forEach((c) => c.remove());
+    const active = points.filter((p) => p.active);
+    if (!active.length) return;
+    this.tpBox ??= tp.querySelector('path')?.getBBox();
+    const b = this.tpBox;
+    if (!b) return;
+    const r = b.width * 0.05;
+    active.forEach((pt, i) => {
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('class', 'ds-touch');
+      c.setAttribute('cx', b.x + r + (Math.min(pt.x, 1919) / 1920) * (b.width - 2 * r));
+      c.setAttribute('cy', b.y + r + (Math.min(pt.y, 1079) / 1080) * (b.height - 2 * r));
+      c.setAttribute('r', r);
+      c.setAttribute('fill', i === 0 ? '#3f6fe8' : '#c4519f');
+      c.setAttribute('fill-opacity', '0.6');
+      c.setAttribute('stroke', '#9db5ff');
+      c.setAttribute('stroke-width', '3');
+      tp.appendChild(c);
+    });
+  }
 }
